@@ -14,18 +14,32 @@ export default function Navbar() {
  
 
   useEffect(() => {
-   
-    // determine if current logged in user is the admin
-    try {
-      const auth = localStorage.getItem('wellStoreAuth');
-      if (auth) {
+    const checkAdmin = async () => {
+      try {
+        const auth = localStorage.getItem('wellStoreAuth');
+        if (!auth) {
+          setIsAdminUser(false);
+          return;
+        }
+
         const parsed = JSON.parse(auth);
-        const email = (parsed.email || '').toLowerCase().trim();
-        if (email === 'manojgunaseelan.g@gmail.com') setIsAdminUser(true);
+        const token = parsed?.token;
+        if (!token) {
+          setIsAdminUser(false);
+          return;
+        }
+
+        const response = await fetch('http://localhost:4000/me', {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const data = await response.json();
+        setIsAdminUser(Boolean(data?.user?.isAdmin));
+      } catch (e) {
+        setIsAdminUser(false);
       }
-    } catch (e) {
-      // ignore
-    }
+    };
+
+    checkAdmin();
   }, []);
 
   // Search Function

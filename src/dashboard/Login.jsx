@@ -16,6 +16,9 @@ export default function Login() {
 
     await withLoading(async () => {
       try {
+        // Clear any stale auth token from previous sessions before logging in.
+        localStorage.removeItem('wellStoreAuth');
+
         const response = await fetch('http://localhost:4000/login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -29,16 +32,14 @@ export default function Login() {
         localStorage.setItem('wellStoreAuth', JSON.stringify({ email: normalizedEmail, token }));
 
         // Ask backend for current user using token to decide navigation (admin vs user)
-        try {
-          const meRes = await fetch('http://localhost:4000/me', {
-            headers: { Authorization: `Bearer ${token}` },
-          });
-          const meData = await meRes.json();
-          const user = meData.user;
-          if (user && user.isAdmin) navigate('/admin');
-          else navigate('/home');
-        } catch (e) {
-          // Fallback: navigate to home
+        const meRes = await fetch('http://localhost:4000/me', {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const meData = await meRes.json();
+        const user = meData.user;
+        if (user && user.isAdmin) {
+          navigate('/admin');
+        } else {
           navigate('/home');
         }
       } catch (err) {

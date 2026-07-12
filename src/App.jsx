@@ -29,7 +29,7 @@ export default function App() {
         <Route path="/categories/kitchen" element={<Kitchen />} /> {/* Fixed lowercase 'route' typo */}
         <Route path="/yourcart" element={<Yourcart />} />
         <Route path="/yourorders" element={<Yoursoredr />} />
-        <Route path="/admin" element={<AdminDashboard />} />
+        <Route path="/admin/*" element={<AdminDashboard />} />
         <Route path="/forgot" element={<Forgot />} />
       </Routes>
     </Router>

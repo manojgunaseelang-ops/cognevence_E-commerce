@@ -1,6 +1,6 @@
 /** @type {import('tailwindcss').Config} */
 export default {
-  content: ['./index.html', './src/**/*.{js,jsx}'],
+  content: ['./index.html', './src/**/*.{js,jsx,ts,tsx,html}'],
   theme: {
     extend: {
       colors: {
@@ -34,4 +34,20 @@ export default {
     },
   },
   plugins: [],
+  // Classes used by admin UI that may be constructed dynamically
+  safelist: [
+    'admin-dashboard-wrapper',
+    'admin-topbar',
+    'admin-navbar-tabs',
+    'admin-tab',
+    'active',
+    'btn',
+    'btn-sm',
+    'btn-primary',
+    'btn-outline-secondary',
+    'bg-white',
+    'bg-light',
+    'text-red-500',
+    'text-green-600'
+  ]
 };

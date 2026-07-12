@@ -1,5 +1,4 @@
 export const DEFAULT_IMAGE_PLACEHOLDER = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="400" height="300" viewBox="0 0 400 300"%3E%3Crect width="400" height="300" fill="%23f3f4f6"/%3E%3Ctext x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="%239ca3af" font-family="Arial, Helvetica, sans-serif" font-size="28"%3ENo Image%3C/text%3E%3C/svg%3E';
-
 export function getProductImage(product) {
   if (!product) return DEFAULT_IMAGE_PLACEHOLDER;
   // Prefer common shapes: product.images[0].image or .url

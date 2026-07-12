@@ -597,6 +597,17 @@
     border-color: rgba(56, 189, 248, 0.35);
   }
 
+  .btn-danger-card {
+    @apply bg-red-500 text-white font-semibold rounded-full border border-red-500;
+    padding: 0.65rem 1rem;
+    transition: background-color 0.2s ease, transform 0.2s ease;
+  }
+
+  .btn-danger-card:hover {
+    background-color: #ef4444;
+    transform: translateY(-1px);
+  }
+
   .admin-dashboard-container {
     @apply mx-auto max-w-6xl px-6 py-10;
   }

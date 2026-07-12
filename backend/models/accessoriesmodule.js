@@ -1,5 +1,4 @@
 const mongoose = require('mongoose');
-
 const Accessory = new mongoose.Schema({
   name: {
     type: String,
@@ -60,6 +59,5 @@ const Accessory = new mongoose.Schema({
 }, {
   timestamps: true // Automatically generates 'createdAt' and 'updatedAt'
 });
-
 const Accessorydata = mongoose.model('Accessorydata', Accessory);
 module.exports = Accessorydata;

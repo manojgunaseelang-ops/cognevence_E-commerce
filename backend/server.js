@@ -14,6 +14,7 @@ const Mobile = require('./models/mobileProductModel');
 const SportShoe = require('./models/sportShoeProductModel');
 const Order = require('./models/orderModel');
 const User = require('./models/usermodule');
+const { normalizeProductReference } = require('./utils/productReference');
 const JWT_SECRET = process.env.JWT_SECRET || 'wellstore_secret_2026';
 const accessoriesData = require('./data/accessories');
 const electronicData = require('./data/electronic');
@@ -67,46 +68,8 @@ app.get('/me', async (req, res) => {
     res.status(500).json({ user: null });
   }
 });
-// Endpoint to initialize or update the default admin
-app.post('/admin/init', async (req, res) => {
-  try {
-    const { email, password, name, removeOtherAdmins } = req.body || {};
-    if (!email || !password) return res.status(400).json({ message: 'Email and password required' });
-
-    const existingAdminCount = await User.countDocuments({ isAdmin: true });
-    // If admins exist and caller is not admin, require auth
-    if (existingAdminCount > 0) {
-      const auth = req.headers.authorization || req.headers.Authorization;
-      if (!auth) return res.status(403).json({ message: 'Admin already exists. Authorization required to change.' });
-      const parts = auth.split(' ');
-      const token = parts.length === 2 ? parts[1] : parts[0];
-      try { var payload = jwt.verify(token, JWT_SECRET); } catch (e) { return res.status(403).json({ message: 'Invalid token' }); }
-      const caller = await User.findById(payload.userId);
-      if (!caller || !caller.isAdmin) return res.status(403).json({ message: 'Admin authorization required' });
-    }
-    const emailNormalized = email.toLowerCase().trim();
-    let user = await User.findOne({ email: emailNormalized });
-    const hashed = await bcrypt.hash(password, 10);
-    if (user) {
-      user.name = name || user.name;
-      user.password = hashed;
-      user.isAdmin = true;
-      await user.save();
-    } else {
-      user = new User({ name: name || 'Admin', email: emailNormalized, password: hashed, isAdmin: true });
-      await user.save();
-    }
-
-    if (removeOtherAdmins) {
-      await User.updateMany({ email: { $ne: emailNormalized } }, { $set: { isAdmin: false } });
-    }
-
-    res.json({ message: 'Admin initialized', user: { email: user.email, name: user.name, isAdmin: user.isAdmin } });
-  } catch (err) {
-    console.error('admin init error:', err);
-    res.status(500).json({ message: 'Error initializing admin' });
-  }
-});
+// Admin init endpoint removed by request.
+// Note: initialization of admin users must be handled externally or via DB scripts.
 const seedCollection = async (Model, data) => {
   const count = await Model.countDocuments();
   if (count === 0) {
@@ -454,7 +417,7 @@ app.post('/orders', async (req, res) => {
       userEmail: userEmail.toLowerCase().trim(),
       totalAmount: Number(totalAmount) || 0,
       items: items.map((item) => ({
-        productId: item.productId,
+        productId: item.productId || item._id || item.id || item.slug || '',
         name: item.name,
         price: Number(item.price) || 0,
         quantity: Number(item.quantity) || 1,
@@ -598,7 +561,7 @@ app.get('/admin/orders', async (req, res) => {
 });
 
 // Admin: Update order status
-app.put('/admin/orders/:orderId', async (req, res) => {
+app.put('/admin/orders/:orderId', adminAuth, async (req, res) => {
   try {
     const { orderId } = req.params;
     const { status } = req.body;
@@ -667,156 +630,104 @@ app.put('/reset-password', async (req, res) => {
 // Protect all /admin routes (except /admin/init which is defined above)
 app.use('/admin', adminAuth);
 
-// Admin: Add Mobile Product
-app.post('/admin/mobileproduct', async (req, res) => {
-  try {
-    const { name, price, description, brand, category, images, gender, ram, rom, display, processor, stock, seller } = req.body;
-    
-    if (!name || !price || !brand || !category) {
-      return res.status(400).json({ message: 'Name, price, brand, and category are required' });
-    }
+// Admin: Create product endpoints
+// These endpoints are protected by `adminAuth` via `app.use('/admin', adminAuth)` above.
 
-    const newProduct = new Mobile({
-      name,
-      price,
-      description,
-      brand,
-      category,
-      images: images || [],
-      gender,
-      ram,
-      rom,
-      display,
-      processor,
-      stock: stock || 0,
-      seller: seller || 'Well-Store'
-    });
+const normalizeImages = (images) => {
+  if (!Array.isArray(images)) return [];
+  return images.map(img => {
+    if (typeof img === 'string') return { image: img };
+    if (img && typeof img === 'object') return { image: img.image || img.url || '' };
+    return null;
+  }).filter(Boolean);
+};
 
-    await newProduct.save();
-    res.status(201).json({ message: 'Mobile product added successfully', product: newProduct });
-  } catch (error) {
-    console.error('Error adding mobile product:', error);
-    res.status(500).json({ message: 'Error adding mobile product' });
-  }
-});
-
-// Admin: Add Sport Shoe Product
-app.post('/admin/sport-shoes', async (req, res) => {
-  try {
-    const { name, slug, brand, category, subCategory, gender, description, pricing, images, variants, totalStock, seller } = req.body;
-    
-    if (!name || !slug || !brand || !gender || !pricing?.basePrice) {
-      return res.status(400).json({ message: 'Name, slug, brand, gender, and base price are required' });
-    }
-
-    const newProduct = new SportShoe({
-      id: slug,
-      name,
-      slug,
-      brand,
-      category: category || 'Sports',
-      subCategory: subCategory || 'Running Shoes',
-      gender,
-      description,
-      pricing,
-      images: images || [],
-      variants: variants || [],
-      totalStock: totalStock || 0,
-      seller: seller || { name: 'Well-Store', id: 'well-store' }
-    });
-
-    await newProduct.save();
-    res.status(201).json({ message: 'Sport shoe product added successfully', product: newProduct });
-  } catch (error) {
-    console.error('Error adding sport shoe:', error);
-    res.status(500).json({ message: 'Error adding sport shoe product' });
-  }
-});
+const normalizeSizesArr = (sizes) => {
+  if (!Array.isArray(sizes)) return [];
+  return sizes.map(s => ({ size: String(s.size || s.label || '').trim(), stock: Math.max(0, Number(s.stock ?? s.count ?? 0)) })).filter(s => s.size);
+};
 
 // Admin: Add Electronics Product
 app.post('/admin/electronics', async (req, res) => {
   try {
     const { name, price, description, brand, category, images, stock, seller, sizes } = req.body;
-    
-    if (!name || !price || !brand || !category) {
-      return res.status(400).json({ message: 'Name, price, brand, and category are required' });
-    }
+    if (!name || price === undefined || !brand || !category) return res.status(400).json({ message: 'Name, price, brand, and category are required' });
 
     const newProduct = new Electronic({
-      name,
-      price,
-      description,
-      brand,
-      category,
-      images: images || [],
-      stock: stock || 0,
-      seller: seller || 'Well-Store',
-      sizes: sizes || []
+      name: String(name).trim(),
+      price: Number(price) || 0,
+      description: description || '',
+      brand: String(brand).trim(),
+      category: String(category).trim(),
+      images: normalizeImages(images),
+      stock: Number(stock) || 0,
+      seller: seller || 'Flipkart',
+      sizes: Array.isArray(sizes) ? sizes : []
     });
 
     await newProduct.save();
     res.status(201).json({ message: 'Electronics product added successfully', product: newProduct });
   } catch (error) {
     console.error('Error adding electronics product:', error);
-    res.status(500).json({ message: 'Error adding electronics product' });
+    res.status(500).json({ message: 'Error adding electronics product', details: error.message });
   }
 });
 
 // Admin: Add Accessories Product
 app.post('/admin/accessories', async (req, res) => {
   try {
-    const { name, price, description, brand, category, images, stock, seller, sizes } = req.body;
-    
-    if (!name || !price || !brand || !category) {
-      return res.status(400).json({ message: 'Name, price, brand, and category are required' });
-    }
+    const { name, price, description, brand, category, images, stock, seller, sizes, gender } = req.body;
+    if (!name || price === undefined || !brand || !category) return res.status(400).json({ message: 'Name, price, brand, and category are required' });
+
+    const allowedSellers = ['Amazon', 'Ebay', 'LensKart', 'Flipkart', 'Myntra'];
+    const chosenSeller = allowedSellers.includes(seller) ? seller : 'Flipkart';
 
     const newProduct = new Accessories({
-      name,
-      price,
-      description,
-      brand,
-      category,
-      images: images || [],
-      stock: stock || 0,
-      seller: seller || 'Well-Store',
-      sizes: sizes || []
+      name: String(name).trim(),
+      price: Number(price) || 0,
+      description: description || '',
+      brand: String(brand).trim(),
+      category: String(category).trim(),
+      images: normalizeImages(images),
+      sizes: normalizeSizesArr(sizes),
+      stock: Number(stock) || (Array.isArray(sizes) ? sizes.reduce((s, x) => s + (Number(x.stock) || 0), 0) : 0),
+      seller: chosenSeller,
+      gender: (['men','women','unisex'].includes((gender||'').toLowerCase()) ? gender.toLowerCase() : 'unisex')
     });
 
     await newProduct.save();
     res.status(201).json({ message: 'Accessories product added successfully', product: newProduct });
   } catch (error) {
     console.error('Error adding accessories product:', error);
-    res.status(500).json({ message: 'Error adding accessories product' });
+    res.status(500).json({ message: 'Error adding accessories product', details: error.message });
   }
 });
 
+// Admin: Add Kitchen Product (removed)
 // Admin: Add Kitchen Product
 app.post('/admin/kitchen', async (req, res) => {
   try {
-    const { name, price, description, brand, category, images, stock, seller, sizes } = req.body;
-    
-    if (!name || !price || !brand || !category) {
-      return res.status(400).json({ message: 'Name, price, brand, and category are required' });
-    }
+    const { name, price, description, brand, category, images, stock, seller, sizes, ratings } = req.body;
+    if (!name || price === undefined || !brand || !category) return res.status(400).json({ message: 'Name, price, brand, and category are required' });
 
     const newProduct = new Kitchen({
-      name,
-      price,
-      description,
-      brand,
-      category,
-      images: images || [],
-      stock: stock || 0,
-      seller: seller || 'Well-Store',
-      sizes: sizes || []
+      name: String(name).trim(),
+      price: Number(price) || 0,
+      description: description || '',
+      ratings: Number(ratings) || 0,
+      brand: String(brand).trim(),
+      category: String(category).trim(),
+      images: normalizeImages(images),
+      sizes: Array.isArray(sizes) ? sizes.map(s => String(s).trim()).filter(Boolean) : (typeof sizes === 'string' ? sizes.split(',').map(s => s.trim()).filter(Boolean) : []),
+      stock: Number(stock) || 0,
+      seller: seller || 'Flipkart'
     });
 
     await newProduct.save();
     res.status(201).json({ message: 'Kitchen product added successfully', product: newProduct });
   } catch (error) {
     console.error('Error adding kitchen product:', error);
-    res.status(500).json({ message: 'Error adding kitchen product' });
+    res.status(500).json({ message: 'Error adding kitchen product', details: error.message });
   }
 });
 
@@ -824,29 +735,148 @@ app.post('/admin/kitchen', async (req, res) => {
 app.post('/admin/faction', async (req, res) => {
   try {
     const { name, price, description, brand, category, images, stock, seller, sizes, gender } = req.body;
-    
-    if (!name || !price || !brand || !category) {
-      return res.status(400).json({ message: 'Name, price, brand, and category are required' });
-    }
+    if (!name || price === undefined || !brand || !category) return res.status(400).json({ message: 'Name, price, brand, and category are required' });
+
+    const cats = ['Sports', 'Clothing'];
+    const chosenCat = cats.includes(category) ? category : 'Clothing';
+
+    const normalizedSizes = normalizeSizesArr(sizes);
+    const aggregatedStock = normalizedSizes.length ? normalizedSizes.reduce((s, x) => s + (Number(x.stock) || 0), 0) : (Number(stock) || 0);
 
     const newProduct = new Faction({
-      name,
-      price,
-      description,
-      brand,
-      category,
-      images: images || [],
-      stock: stock || 0,
-      seller: seller || 'Well-Store',
-      sizes: sizes || [],
-      gender: gender
+      name: String(name).trim(),
+      price: Number(price) || 0,
+      description: description || '',
+      brand: String(brand).trim(),
+      category: chosenCat,
+      images: normalizeImages(images),
+      sizes: normalizedSizes,
+      stock: aggregatedStock,
+      seller: seller || 'Flipkart',
+      gender: (['men','women','unisex'].includes((gender||'').toLowerCase()) ? gender.toLowerCase() : 'unisex')
     });
 
     await newProduct.save();
     res.status(201).json({ message: 'Fashion product added successfully', product: newProduct });
   } catch (error) {
     console.error('Error adding fashion product:', error);
-    res.status(500).json({ message: 'Error adding fashion product' });
+    res.status(500).json({ message: 'Error adding fashion product', details: error.message });
+  }
+});
+
+// Admin: Add Mobile Product
+app.post('/admin/mobileproduct', async (req, res) => {
+  try {
+    const { name, price, description, brand, category, images, stock, seller, sizes, gender, ratings, ram, rom, display, processor } = req.body;
+
+    if (!name || price === undefined || !brand || !category) {
+      return res.status(400).json({ message: 'Name, price, brand, and category are required' });
+    }
+
+    const normalizedSizes = Array.isArray(sizes)
+      ? sizes.map((s) => ({ size: String(s.size || s.label || '').trim(), stock: Number(s.stock || s.count || 0) })).filter((s) => s.size)
+      : [];
+
+    const computedStock = normalizedSizes.length
+      ? normalizedSizes.reduce((sum, s) => sum + (Number(s.stock) || 0), 0)
+      : Number(stock) || 0;
+
+    const newProduct = new Mobile({
+      name: String(name).trim(),
+      price: Number(price) || 0,
+      description: description || '',
+      ratings: Number(ratings) || 0,
+      brand: String(brand).trim(),
+      category: String(category).trim(),
+      images: normalizeImages(images),
+      sizes: normalizedSizes,
+      stock: computedStock,
+      seller: seller || 'Flipkart',
+      gender: (['men','women','unisex'].includes((gender || '').toLowerCase()) ? gender.toLowerCase() : undefined),
+      ram: ram || '',
+      rom: rom || '',
+      display: display || '',
+      processor: processor || ''
+    });
+
+    await newProduct.save();
+    res.status(201).json({ message: 'Mobile product added successfully', product: newProduct });
+  } catch (error) {
+    console.error('Error adding mobile product:', error);
+    res.status(500).json({ message: 'Error adding mobile product', details: error.message });
+  }
+});
+
+// Admin: Add Sport Shoe Product
+app.post('/admin/sport-shoes', async (req, res) => {
+  try {
+    const {
+      id,
+      name,
+      slug,
+      brand,
+      category,
+      subCategory,
+      gender,
+      description,
+      pricing,
+      seller,
+      images,
+      variants
+    } = req.body;
+
+    if (!id || !name || !slug || !brand || !category || !subCategory || !gender || !pricing || !pricing.basePrice || !seller || !seller.name || !seller.id) {
+      return res.status(400).json({ message: 'id, name, slug, brand, category, subCategory, gender, pricing.basePrice, seller.name and seller.id are required' });
+    }
+
+    const filteredImages = Array.isArray(images)
+      ? images
+          .filter((img) => img && (img.url || '').trim() !== '')
+          .map((img) => ({ url: String(img.url).trim(), alt: String(img.alt || '').trim(), isMain: Boolean(img.isMain) }))
+      : [];
+
+    const filteredVariants = Array.isArray(variants)
+      ? variants
+          .filter((v) => v && (v.sku || '').trim() !== '' && (v.size || '').trim() !== '')
+          .map((v) => ({ sku: String(v.sku).trim(), size: String(v.size).trim(), stock: Number(v.stock) || 0 }))
+      : [];
+
+    const totalStock = filteredVariants.length
+      ? filteredVariants.reduce((sum, variant) => sum + (Number(variant.stock) || 0), 0)
+      : 0;
+
+    const newProduct = new SportShoe({
+      id: String(id).trim(),
+      name: String(name).trim(),
+      slug: String(slug).trim(),
+      brand: String(brand).trim(),
+      category: String(category).trim(),
+      subCategory: String(subCategory).trim(),
+      gender: ['men', 'women', 'unisex'].includes(String(gender).toLowerCase()) ? String(gender).toLowerCase() : 'unisex',
+      description: String(description || '').trim(),
+      pricing: {
+        basePrice: Number(pricing.basePrice) || 0,
+        currency: String(pricing.currency || 'INR').trim(),
+        discountPercentage: Number(pricing.discountPercentage) || 0
+      },
+      rating: {
+        average: Number(req.body.rating?.average) || 0,
+        reviewCount: Number(req.body.rating?.reviewCount) || 0
+      },
+      images: filteredImages,
+      variants: filteredVariants,
+      totalStock,
+      seller: {
+        name: String(seller.name).trim(),
+        id: String(seller.id).trim()
+      }
+    });
+
+    await newProduct.save();
+    res.status(201).json({ message: 'Sport shoe product added successfully', product: newProduct });
+  } catch (error) {
+    console.error('Error adding sport shoe product:', error);
+    res.status(500).json({ message: 'Error adding sport shoe product', details: error.message });
   }
 });
 
@@ -900,13 +930,13 @@ const makeUpdateHandler = (Model, numericFields = []) => async (req, res) => {
   }
 };
 
-// Electronics
+// Electronics (update -> PUT)
 app.put('/admin/electronics/:id', makeUpdateHandler(Electronic, ['price', 'stock']));
 
-// Accessories
+// Accessories (update -> PUT)
 app.put('/admin/accessories/:id', makeUpdateHandler(Accessories, ['price', 'stock']));
 
-// Kitchen
+// Kitchen (update -> PUT)
 app.put('/admin/kitchen/:id', makeUpdateHandler(Kitchen, ['price', 'stock']));
 
 // Faction (fashion) - specialized update to handle `sizes` array and images
@@ -976,10 +1006,10 @@ app.put('/admin/faction/:id', async (req, res) => {
   }
 });
 
-// Mobile Product
+// Mobile Product (update -> PUT)
 app.put('/admin/mobileproduct/:id', makeUpdateHandler(Mobile, ['price', 'stock', 'ram', 'rom']));
 
-// Sport Shoes
+// Sport Shoes (update -> PUT)
 app.put('/admin/sport-shoes/:id', makeUpdateHandler(SportShoe, ['totalStock']));
 
 // Generic delete handler factory with fallback fields
@@ -1032,21 +1062,23 @@ const reduceStockForOrder = async (order) => {
     if (qty === 0) continue;
 
     const selectedSize = item.selectedSize || item.size || '';
-    const prodId = item.productId;
+    const prodId = item.productId || item._id || item.id || item.slug || '';
 
     const collections = [Faction, Accessories, Electronic, Kitchen, Mobile, SportShoe];
     let found = null;
     let model = null;
 
+    const normalizedProdId = normalizeProductReference({ _id: prodId, id: prodId, slug: prodId });
+
     for (const M of collections) {
       try {
-        if (mongoose.Types.ObjectId.isValid(prodId)) {
-          const doc = await M.findById(prodId);
+        if (mongoose.Types.ObjectId.isValid(normalizedProdId)) {
+          const doc = await M.findById(normalizedProdId);
           if (doc) { found = doc; model = M; break; }
         }
-        const byId = await M.findOne({ id: prodId });
+        const byId = await M.findOne({ id: normalizedProdId });
         if (byId) { found = byId; model = M; break; }
-        const bySlug = await M.findOne({ slug: prodId });
+        const bySlug = await M.findOne({ slug: normalizedProdId });
         if (bySlug) { found = bySlug; model = M; break; }
       } catch (e) {
         // ignore
